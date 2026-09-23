@@ -1,5 +1,6 @@
 # ===== 构建目录 (CMake 编译产物) =====
 build/
+result/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
@@ -14,16 +15,12 @@ Makefile
 *.exe
 *.out
 
+
 # ===== IDE / 编辑器配置 =====
 .vscode/
 .idea/
 *.swp
 *.swo
-
-
-
-
-# 如果你的代码必须有图片才能跑，或者想把图片作为作业提交物，请把上面的图片规则注释掉（前面加#）
 
 # ===== 系统生成文件 =====
 .DS_Store

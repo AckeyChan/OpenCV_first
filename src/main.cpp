@@ -80,7 +80,7 @@ static bool fitInitialParameters(const std::vector<AngleObservation>& observatio
     // angle = c + b*t + p*cos(w*t) + q*sin(w*t)，从而用线性最小二乘求初值。
     for (int step = 1; step <= 100; ++step)
     {
-        const double frequency = 0.1 + 0.049 * step;
+        const double frequency = 0.1 + 0.049* step;
         Mat design(static_cast<int>(observations.size()), 4, CV_64F);
         Mat values(static_cast<int>(observations.size()), 1, CV_64F);
         for (size_t index = 0; index < observations.size(); ++index)
@@ -283,9 +283,9 @@ static void writeTask2Png(const std::string& path,
     minValue -= margin;
     maxValue += margin;
     Mat plot(height, width, CV_8UC3, Scalar(255, 255, 255));
-    line(plot, Point(left, top), Point(left, height - bottom), Scalar(0, 0, 0), 2);
+        line(plot, Point(left, top), Point(left, height - bottom), Scalar(0, 0, 0), 1);
     line(plot, Point(left, height - bottom), Point(width - right, height - bottom),
-         Scalar(0, 0, 0), 2);
+            Scalar(0, 0, 0), 1);
     auto toPoint = [&](double time, double value) {
         const int x = left + static_cast<int>(time / maxTime * (width - left - right));
         const int y = height - bottom - static_cast<int>(
@@ -315,26 +315,26 @@ static void writeTask2Png(const std::string& path,
     }
     if (plotType == 0)
     {
-        polylines(plot, observedPoints, false, Scalar(140, 140, 140), 1, LINE_AA);
-        polylines(plot, fittedPoints, false, Scalar(0, 0, 0), 2, LINE_AA);
+        polylines(plot, observedPoints, false, Scalar(0, 180, 0), 1, LINE_AA);
+        polylines(plot, fittedPoints, false, Scalar(0, 0, 0), 1, LINE_AA);
         putText(plot, "observed", Point(width - 210, 30), FONT_HERSHEY_SIMPLEX,
-            0.7, Scalar(140, 140, 140), 2);
+                0.7, Scalar(0, 180, 0), 1);
         putText(plot, "fitted", Point(width - 105, 30), FONT_HERSHEY_SIMPLEX,
-            0.7, Scalar(0, 0, 0), 2);
+                0.7, Scalar(0, 0, 0), 1);
         putText(plot, "Angle: observed vs fitted (rad)", Point(left, 30),
-                FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 2);
+                FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 1);
     }
     else if (plotType == 1)
     {
-        polylines(plot, observedPoints, false, Scalar(0, 0, 0), 2, LINE_AA);
+        polylines(plot, observedPoints, false, Scalar(0, 0, 0), 1, LINE_AA);
         putText(plot, "Angle residual (rad)", Point(left, 30),
-                FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 2);
+                FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 1);
     }
     else
     {
-        polylines(plot, observedPoints, false, Scalar(0, 0, 0), 2, LINE_AA);
+        polylines(plot, observedPoints, false, Scalar(0, 0, 0), 1, LINE_AA);
         putText(plot, "Estimated angular velocity (rad/s)", Point(left, 30),
-                FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 2);
+                FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 1);
     }
     putText(plot, "time (s)", Point(width - 120, height - 25), FONT_HERSHEY_SIMPLEX,
             0.6, Scalar(0, 0, 0), 1);
@@ -496,18 +496,18 @@ static bool runTask2(const std::string& inputPath, const std::string& outputDir)
     frameIndex = 0;
     while (video.read(frame))
     {
-        circle(frame, center, 8, Scalar(255, 255, 255), 2);
+        circle(frame, center, 8, Scalar(255, 255, 255), 1);
         if (observationIndex < observations.size() && observations[observationIndex].frame == frameIndex)
         {
-            circle(frame, observations[observationIndex].point, 8, Scalar(0, 0, 0), 2);
+            circle(frame, observations[observationIndex].point, 8, Scalar(0, 0, 0), 1);
             ++observationIndex;
         }
         putText(frame, "A=" + std::to_string(parameters[0]) + " b="
                 + std::to_string(parameters[1]), Point(20, 35),
-                FONT_HERSHEY_SIMPLEX, 0.65, Scalar(0, 0, 0), 2);
+                FONT_HERSHEY_SIMPLEX, 0.65, Scalar(0, 0, 0), 1);
         putText(frame, "Omega=" + std::to_string(parameters[2]) + " phi="
                 + std::to_string(phase), Point(20, 65),
-                FONT_HERSHEY_SIMPLEX, 0.65, Scalar(0, 0, 0), 2);
+                FONT_HERSHEY_SIMPLEX, 0.65, Scalar(0, 0, 0), 1);
         writer.write(frame);
         ++frameIndex;
     }
