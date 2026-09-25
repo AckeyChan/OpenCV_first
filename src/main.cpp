@@ -341,6 +341,321 @@ static void writeTask2Png(const std::string& path,
     imwrite(path, plot);
 }
 
+struct FanCandidate
+{
+    Point2f center;
+    float radius;
+    double area;
+    int maskArea;
+    double circularity;
+};
+
+struct FanTrack
+{
+    int id;
+    Point2f center;
+    Point2f rCenter;
+    Point2f velocity;
+    float radius;
+    int missedFrames;
+    bool active;
+};
+
+static std::vector<FanCandidate> detectFanCandidates(const Mat& frame, Mat* processedMask = nullptr)
+{
+    Mat hsv;
+    cvtColor(frame, hsv, COLOR_BGR2HSV);
+
+    // 真实能量机关的发光部分为橙黄色，背景较暗，因此先按色相和亮度提取。
+    Mat orangeMask;
+    inRange(hsv, Scalar(5, 37, 40), Scalar(35, 255, 255), orangeMask);
+    Mat closeKernel = getStructuringElement(MORPH_ELLIPSE, Size(3, 3));
+    morphologyEx(orangeMask, orangeMask, MORPH_CLOSE, closeKernel);
+    if (processedMask != nullptr)
+    {
+        orangeMask.copyTo(*processedMask);
+    }
+
+    std::vector<std::vector<Point>> contours;
+    findContours(orangeMask, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+    std::vector<FanCandidate> candidates;
+    for (size_t index = 0; index < contours.size(); ++index)
+    {
+        const std::vector<Point>& contour = contours[index];
+        const double area = contourArea(contour);
+        const double perimeter = arcLength(contour, true);
+        const double circularity = perimeter > 0.0
+            ? 4.0 * CV_PI * area / (perimeter * perimeter) : 0.0;
+        const Rect box = boundingRect(contour);
+        if (area < 1.0 || box.width < 20 || box.height < 20 ||
+            box.width > 300 || box.height > 300 ||
+            (area >= 100.0 && circularity < 0.30))
+        {
+            continue;
+        }
+        Point2f enclosingCenter;
+        float enclosingRadius = 0.0F;
+        minEnclosingCircle(contour, enclosingCenter, enclosingRadius);
+        if (enclosingRadius < 12.0F || enclosingRadius > 180.0F)
+        {
+            continue;
+        }
+        Mat circleMask = Mat::zeros(orangeMask.size(), CV_8UC1);
+        circle(circleMask, Point(cvRound(enclosingCenter.x), cvRound(enclosingCenter.y)),
+               cvRound(enclosingRadius), Scalar(255), FILLED);
+        Mat trackedRegion;
+        bitwise_and(orangeMask, circleMask, trackedRegion);
+        const int maskArea = countNonZero(trackedRegion);
+        candidates.push_back({enclosingCenter, enclosingRadius, area,
+                              maskArea, circularity});
+    }
+    return candidates;
+}
+
+static void drawFanTrack(Mat& frame, const FanTrack& track)//画画
+{
+    const Scalar centerColor(255, 255, 255);
+    const Scalar targetColor(0, 255, 0);
+    const Scalar lineColor(255, 255, 255);
+        circle(frame, track.rCenter, 8, centerColor, 1);
+        line(frame, Point2f(track.rCenter.x - 12.0F, track.rCenter.y),
+            Point2f(track.rCenter.x + 12.0F, track.rCenter.y), centerColor, 1);
+        line(frame, Point2f(track.rCenter.x, track.rCenter.y - 12.0F),
+            Point2f(track.rCenter.x, track.rCenter.y + 12.0F), centerColor, 1);
+    circle(frame, track.center, track.radius, targetColor, 1);
+    circle(frame, track.center, 4, targetColor, 1);
+    line(frame, track.rCenter, track.center, lineColor, 1);
+    const std::string status = track.missedFrames == 0 ? "detected" : "lost";
+    putText(frame, "ID " + std::to_string(track.id) + " " + status,
+            Point(static_cast<int>(track.center.x + track.radius + 5.0F),
+                  static_cast<int>(track.center.y)),
+            FONT_HERSHEY_SIMPLEX, 0.55, targetColor, 1);
+}
+
+static bool runMaskVideo(const std::string& inputPath, const std::string& outputDir)
+{
+    std::filesystem::create_directories(outputDir);
+    VideoCapture video(inputPath);
+    if (!video.isOpened())
+    {
+        std::cerr << "无法打开用于生成 mask 视频的输入: " << inputPath << std::endl;
+        return false;
+    }
+
+    const double fps = video.get(CAP_PROP_FPS) > 0 ? video.get(CAP_PROP_FPS) : 30.0;
+    const int width = static_cast<int>(video.get(CAP_PROP_FRAME_WIDTH));
+    const int height = static_cast<int>(video.get(CAP_PROP_FRAME_HEIGHT));
+    VideoWriter writer(outputDir + "/mask_video.mp4",
+                       VideoWriter::fourcc('m', 'p', '4', 'v'), fps,
+                       Size(width, height), false);
+    if (!writer.isOpened())
+    {
+        std::cerr << "无法创建 mask 视频: " << outputDir << std::endl;
+        return false;
+    }
+
+    Mat frame;
+    while (video.read(frame))
+    {
+        Mat mask;
+        detectFanCandidates(frame, &mask);
+        const Mat dilateKernel = getStructuringElement(MORPH_ELLIPSE, Size(3, 3));
+        dilate(mask, mask, dilateKernel, Point(-1, -1), 1);
+        writer.write(mask);
+    }
+    writer.release();
+    video.release();
+    return true;
+}
+
+static bool runTask3(const std::string& inputPath, const std::string& outputDir,
+                     int maximumTargets)
+{
+    std::filesystem::create_directories(outputDir);
+    VideoCapture video(inputPath);
+    if (!video.isOpened())
+    {
+        std::cerr << "无法打开能量机关视频: " << inputPath << std::endl;
+        return false;
+    }
+    const double fps = video.get(CAP_PROP_FPS) > 0 ? video.get(CAP_PROP_FPS) : 30.0;
+    const int width = static_cast<int>(video.get(CAP_PROP_FRAME_WIDTH));
+    const int height = static_cast<int>(video.get(CAP_PROP_FRAME_HEIGHT));
+    VideoWriter writer(outputDir + "/tracking_overlay.mp4",
+                       VideoWriter::fourcc('m', 'p', '4', 'v'), fps,
+                       Size(width, height));
+    if (!writer.isOpened())
+    {
+        std::cerr << "无法创建跟踪结果视频: " << outputDir << std::endl;
+        return false;
+    }
+
+    std::vector<FanTrack> tracks;
+    int nextId = 1;
+    const int lostTolerance = 5;
+    const int minFanMaskArea = 1500;
+    const double associationDistance = 50.0;
+    const double velocitySmoothing = 0.35;
+    const int lostSearchAttempts = 5;
+    const double lostSearchStep = 15.0;
+    const int maskFrame = static_cast<int>(std::lround(6.0 * fps));
+    bool maskSaved = false;
+    int frameIndex = 0;
+    Mat frame;
+    while (video.read(frame))
+    {
+        Mat processedMask;
+        const std::vector<FanCandidate> allCandidates =
+            detectFanCandidates(frame, &processedMask);
+        if (!maskSaved && frameIndex == maskFrame)
+        {
+            imwrite(outputDir + "/mask_6s.png", processedMask);
+            maskSaved = true;
+        }
+        std::vector<FanCandidate> candidates;
+        std::vector<FanCandidate> centerCandidates;
+        for (const FanCandidate& candidate : allCandidates)
+        {
+            // 扇叶外接圆通常更大，R 标中心是较小的紧凑圆形组件。
+            if (candidate.radius >= 35.0F)
+            {
+                candidates.push_back(candidate);
+            }
+            else if (candidate.radius >= 10.0F && candidate.radius < 18.0F)
+            {
+                centerCandidates.push_back(candidate);
+            }
+        }
+        std::vector<bool> used(candidates.size(), false);
+
+        // 先用当前跟踪位置预测下一位置，再按距离关联候选，保持目标身份。
+        for (FanTrack& track : tracks)
+        {
+            if (!track.active)
+            {
+                continue;
+            }
+            const bool isLost = track.missedFrames > 0;
+            const Point2f searchCenter = isLost
+                ? track.center : track.center + track.velocity;
+            int bestIndex = -1;
+            double bestDistance = associationDistance;
+            const int attempts = isLost ? lostSearchAttempts : 1;
+            for (int attempt = 0; attempt < attempts && bestIndex < 0; ++attempt)
+            {
+                const double searchDistance = associationDistance
+                    + (isLost ? lostSearchStep * attempt : 0.0);
+                bestDistance = searchDistance;
+                for (size_t index = 0; index < candidates.size(); ++index)
+                {
+                    if (used[index])
+                    {
+                        continue;
+                    }
+                    const double distance = norm(candidates[index].center - searchCenter);
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        bestIndex = static_cast<int>(index);
+                    }
+                }
+            }
+            if (bestIndex >= 0)
+            {
+                // 使用实际关联到的扇叶外接圆区域，而不是预测位置区域。
+                // maskArea 是该检测区域内全部 mask 像素的总数。
+                if (candidates[bestIndex].maskArea < minFanMaskArea)
+                {
+                    track.missedFrames++;
+                    used[bestIndex] = true;
+                    if (track.missedFrames > lostTolerance)
+                    {
+                        track.active = false;
+                    }
+                    continue;
+                }
+                const Point2f oldCenter = track.center;
+                track.center = candidates[bestIndex].center;
+                const Point2f measuredVelocity = track.center - oldCenter;
+                track.velocity = static_cast<float>(velocitySmoothing) * measuredVelocity
+                    + static_cast<float>(1.0 - velocitySmoothing) * track.velocity;
+                track.radius = candidates[bestIndex].radius;
+                track.missedFrames = 0;
+                used[bestIndex] = true;
+            }
+            else
+            {
+                track.missedFrames++;
+                if (track.missedFrames > lostTolerance)
+                {
+                    track.active = false;
+                }
+            }
+        }
+
+        // 只有空闲跟踪槽位才创建新 ID；不会因每帧检测顺序变化而换 ID。
+        for (size_t index = 0; index < candidates.size(); ++index)
+        {
+            if (used[index] || candidates[index].maskArea < minFanMaskArea)
+            {
+                continue;
+            }
+            bool hasInactiveSlot = false;
+            for (FanTrack& track : tracks)
+            {
+                if (!track.active)
+                {
+                    track = {nextId++, candidates[index].center, candidates[index].center,
+                             Point2f(), candidates[index].radius, 0, true};
+                    hasInactiveSlot = true;
+                    break;
+                }
+            }
+            if (!hasInactiveSlot && static_cast<int>(tracks.size()) < maximumTargets)
+            {
+                tracks.push_back({nextId++, candidates[index].center, candidates[index].center,
+                                  Point2f(), candidates[index].radius, 0, true});
+            }
+            used[index] = true;
+        }
+
+        // 每个目标关联最近的 R 标中心，中心随画面变化，不使用固定图像坐标。
+        for (FanTrack& track : tracks)
+        {
+            if (track.active && track.missedFrames == 0)
+            {
+                // 目标扇叶旁的小圆属于扇叶本身；连接线另一端更远的圆才是 R 标中心。
+                double bestDistance = 0.0;
+                for (const FanCandidate& centerCandidate : centerCandidates)
+                {
+                    const double distance = norm(centerCandidate.center - track.center);
+                    if (distance > bestDistance && distance < 450.0)
+                    {
+                        bestDistance = distance;
+                        track.rCenter = centerCandidate.center;
+                    }
+                }
+            }
+        }
+
+        for (const FanTrack& track : tracks)
+        {
+            if (track.active)
+            {
+                drawFanTrack(frame, track);
+            }
+        }
+        putText(frame, maximumTargets == 1 ? "small energy mechanism" :
+                "large energy mechanism", Point(20, 30), FONT_HERSHEY_SIMPLEX,
+                0.7, Scalar(255, 255, 255), 1);
+        writer.write(frame);
+        ++frameIndex;
+    }
+    writer.release();
+    video.release();
+    return true;
+}
+
 static bool runTask2(const std::string& inputPath, const std::string& outputDir)
 {
     std::filesystem::create_directories(outputDir);
@@ -623,6 +938,15 @@ int main()
 
 
 
+
+    if (!runTask3("../resources/task_3.mp4", "../result/task3_windmill/task_3", 1) ||
+        !runTask3("../resources/task_4.mp4", "../result/task3_windmill/task_4", 2) )
+        //!runMaskVideo("../resources/task_3.mp4", "../result/task3_windmill/task_3") ||
+       // !runMaskVideo("../resources/task_4.mp4", "../result/task3_windmill/task_4")
+       
+    {
+        return -1;
+    }
 
     return 0;
 }
