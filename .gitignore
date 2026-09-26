@@ -1,6 +1,6 @@
 # ===== 构建目录 (CMake 编译产物) =====
 build/
-result/
+#result/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
